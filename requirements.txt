@@ -1,0 +1,5 @@
+numpy~=2.2.5
+torch~=2.7.0
+gymnasium~=1.1.1
+omegaconf~=2.3.0
+tqdm~=4.67.1

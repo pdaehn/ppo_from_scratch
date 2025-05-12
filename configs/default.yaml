@@ -1,0 +1,32 @@
+env:
+  name: CartPole-v1
+
+ppo:
+  gamma: 0.99
+  gae_lambda: 0.95
+  vf_coef: 0.5
+  ent_coef: 0.001
+  clip_epsilon: 0.1
+  norm_adv: True
+
+training:
+  max_steps: 1_000_000
+  save_interval: 10
+  rollout_length: 2048
+  minibatch_size: 64
+  num_envs: 8
+  update_epochs: 10
+  lr: 0.001
+  anneal_lr: True
+  model_dir: ./models
+
+model:
+  trunk_hidden: [64, 64]
+  actor_hidden: [32]
+  critic_hidden: [32]
+  activation: "tanh"
+  output_activation: null
+
+logging:
+  log_dir: ./logs
+  log_interval: 10_000
