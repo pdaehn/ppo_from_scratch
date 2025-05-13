@@ -1,11 +1,18 @@
 import os
 import numpy as np
 import torch
+from gymnasium import Space
+from gymnasium.spaces import Discrete, Box
+from gymnasium.vector import AsyncVectorEnv, SyncVectorEnv
 
 from numpy import floating
 from typing import Any
+
+from torch.optim.lr_scheduler import LambdaLR
+
 from ppo.buffer import RolloutBuffer
 from ppo.model import ActorCritic
+from utils.logger import TensorBoardLogger
 
 
 class PPO:
@@ -16,7 +23,13 @@ class PPO:
     It collects rollouts, updates the policy and value networks, evaluates the agent, and handles model saving/loading.
     """
 
-    def __init__(self, obs_space, action_space, **cfg) -> None:
+    def __init__(
+        self,
+        obs_space: Space[Box | Discrete],
+        action_space: Space[Box | Discrete],
+        logger: TensorBoardLogger,
+        **cfg,
+    ) -> None:
         """
         Initialise the PPO agent.
 
@@ -25,6 +38,10 @@ class PPO:
             action_space: action space of the environment.
             cfg: configuration dictionary containing hyperparameters and model settings.
         """
+        self.cfg = cfg
+        self.global_step = 0
+        self.logger = logger
+
         self.clip_epsilon = cfg["ppo"]["clip_epsilon"]
         self.vf_coef = cfg["ppo"]["vf_coef"]
         self.ent_coef = cfg["ppo"]["ent_coef"]
@@ -37,6 +54,8 @@ class PPO:
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        self.discrete_act_space = isinstance(action_space, Discrete)
+
         self.actor_critic = ActorCritic(obs_space, action_space, **cfg["model"]).to(
             self.device
         )
@@ -44,6 +63,16 @@ class PPO:
         self.optimizer = torch.optim.Adam(
             lr=cfg["training"]["lr"], params=self.actor_critic.parameters()
         )
+
+        if self.cfg["training"]["anneal_lr"]:
+            total_updates = self.cfg["training"]["max_steps"] // (
+                self.cfg["training"]["num_envs"]
+                * self.cfg["training"]["rollout_length"]
+            )
+
+            self.lr_scheduler = LambdaLR(
+                self.optimizer, lr_lambda=lambda update: 1 - update / total_updates
+            )
 
         self.buffer = RolloutBuffer(
             obs_space,
@@ -55,47 +84,40 @@ class PPO:
             self.device,
         )
 
-    def collect_rollouts(self, envs) -> None:
+    def collect_rollouts(self, envs: AsyncVectorEnv) -> None:
         """
         Collect rollouts from the environment and store them in the buffer.
 
         Args:
             envs: the environment to collect rollouts from.
         """
-        next_obs = torch.tensor(
-            envs.reset()[0], dtype=torch.float32, device=self.device
-        )
-        next_dones = torch.zeros(
-            next_obs.size(0), dtype=torch.float32, device=self.device
-        )
+        obs = torch.tensor(envs.reset()[0], dtype=torch.float32, device=self.device)
 
         for _ in range(self.rollout_length):
-            obs = next_obs
-            dones = next_dones
-
             with torch.no_grad():
-                action, logp, entropy, value = self.actor_critic.act(next_obs)
+                action, logp, entropy, value = self.actor_critic.act(obs)
 
             next_obs, reward, termination, truncation, _ = envs.step(
                 action.cpu().numpy()
             )
-            next_dones = np.logical_or(termination, truncation)
+            done = torch.tensor(
+                np.logical_or(termination, truncation),
+                dtype=torch.float32,
+                device=self.device,
+            )
 
             next_obs = torch.tensor(next_obs, dtype=torch.float32, device=self.device)
             reward = torch.tensor(reward, dtype=torch.float32, device=self.device)
-            next_dones = torch.tensor(
-                next_dones, dtype=torch.float32, device=self.device
-            )
 
-            self.buffer.add_transition(obs, action, logp, reward, dones, value)
+            self.buffer.add_transition(obs, action, logp, reward, done, value)
 
-    def update(self, logger, num_steps) -> None:
+            obs = next_obs
+
+        self.global_step += self.rollout_length * self.num_envs
+
+    def update(self) -> None:
         """
         Update the policy and value networks using the collected rollouts.
-
-        Args:
-            logger: logger to log the training progress.
-            num_steps: number of steps taken in the environment.
         """
 
         with torch.no_grad():
@@ -122,13 +144,16 @@ class PPO:
             act_b = self.buffer.act_buf.view(-1, *self.buffer.act_shape[2:])
             logp_b = self.buffer.logp_buf.view(-1)
             adv_b = self.buffer.adv_buf.view(-1)
-            ret_b = self.buffer.val_buf.view(-1)
+            ret_b = self.buffer.ret_buf.view(-1)
+
+            adv_b_mean = torch.mean(adv_b)
+            adv_b_std = torch.std(adv_b)
 
             for start in range(0, len(ind), self.mini_batch_size):
                 mb = ind[start : start + self.mini_batch_size]
 
                 if self.norm_adv:
-                    adv_mb = (adv_b[mb] - adv_b.mean()) / (adv_b.std() + 1e-8)
+                    adv_mb = (adv_b[mb] - adv_b_mean) / (adv_b_std + 1e-8)
                 else:
                     adv_mb = adv_b[mb]
 
@@ -170,8 +195,9 @@ class PPO:
                 ent_loss.append(entropy_loss.item())
                 epoch_kl.append((logp_b[mb] - new_logp).mean().item())
                 total_loss.append(loss.item())
+
         # log the losses
-        logger.log_scalars(
+        self.logger.log_scalars(
             {
                 "policy_loss": np.mean(pg_loss),
                 "value_loss": np.mean(vf_loss),
@@ -180,18 +206,16 @@ class PPO:
                 "epoch_kl": np.mean(epoch_kl),
                 "total_loss": np.mean(total_loss),
             },
-            num_steps,
+            self.global_step,
             "loss",
         )
 
-    def full_testing_episode(self, envs, logger, num_steps) -> floating[Any]:
+    def evaluate_policy(self, envs: SyncVectorEnv) -> floating[Any]:
         """
         Evaluate the agent in the environment for a full episode.
 
         Args:
             envs: the environment to evaluate the agent in.
-            logger: logger to log the evaluation results.
-            num_steps: number of steps taken in the environment.
 
         Returns:
             mean_reward: the mean reward obtained during the evaluation.
@@ -219,7 +243,7 @@ class PPO:
             next_obs = torch.tensor(next_obs, dtype=torch.float32, device=self.device)
 
         mean_reward = np.mean(rewards)
-        logger.log_scalar("eval/mean_reward", mean_reward, num_steps)
+        self.logger.log_scalar("eval/mean_reward", mean_reward, self.global_step)
         return mean_reward
 
     def save(self, path: str, model_name: str | None = None) -> None:
@@ -227,8 +251,8 @@ class PPO:
         Save the model to the specified path.
 
         Args:
-            path (str): The directory where the model will be saved.
-            model_name (str, optional): The name of the model file. If None, a default name will be generated.
+            path: The directory where the model will be saved.
+            model_name: The name of the model file. If None, a default name will be generated.
         """
         if not os.path.exists(path):
             os.makedirs(path)
@@ -240,21 +264,35 @@ class PPO:
 
         save_path = os.path.join(path, model_name)
 
-        torch.save(
-            {
-                "actor": self.actor_critic.actor.state_dict(),
-                "critic": self.actor_critic.critic.state_dict(),
-                "trunk": self.actor_critic.trunk.state_dict(),
-            },
-            save_path,
-        )
+        if self.discrete_act_space:
+            torch.save(
+                {
+                    "actor": self.actor_critic.actor.state_dict(),
+                    "critic": self.actor_critic.critic.state_dict(),
+                    "trunk": self.actor_critic.trunk.state_dict(),
+                    "optimizer": self.optimizer.state_dict(),
+                    "config": self.cfg,
+                },
+                save_path,
+            )
+        else:
+            torch.save(
+                {
+                    "mean_layer": self.actor_critic.mean_layer.state_dict(),
+                    "log_param": self.actor_critic.log_std.detach().cpu().numpy(),
+                    "trunk": self.actor_critic.trunk.state_dict(),
+                    "optimizer": self.optimizer.state_dict(),
+                    "config": self.cfg,
+                },
+                save_path,
+            )
 
     def load(self, path: str) -> None:
         """
         Load the latest model from the specified path.
 
         Args:
-            path (str): The directory where the model is saved.
+            path: The directory where the model is saved.
         """
 
         if not os.path.exists(path):
@@ -270,6 +308,14 @@ class PPO:
 
         checkpoint = torch.load(path, map_location=self.device)
 
-        self.actor_critic.actor.load_state_dict(checkpoint["actor"])
-        self.actor_critic.critic.load_state_dict(checkpoint["critic"])
-        self.actor_critic.trunk.load_state_dict(checkpoint["trunk"])
+        if self.discrete_act_space:
+            self.actor_critic.actor.load_state_dict(checkpoint["actor"])
+            self.actor_critic.critic.load_state_dict(checkpoint["critic"])
+            self.actor_critic.trunk.load_state_dict(checkpoint["trunk"])
+
+        else:
+            self.actor_critic.mean_layer.load_state_dict(checkpoint["mean_layer"])
+            self.actor_critic.log_std.data = torch.tensor(
+                checkpoint["log_param"], device=self.device
+            )
+            self.actor_critic.trunk.load_state_dict(checkpoint["trunk"])

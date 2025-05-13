@@ -56,7 +56,6 @@ class ActorCritic(nn.Module):
 
         head_hidden = actor_hidden or []
         if self.discrete:
-
             self.actor = build_mlp(
                 input_dim=trunk_hidden[-1],
                 output_dim=self.action_dim,
@@ -65,7 +64,6 @@ class ActorCritic(nn.Module):
                 output_activation=output_activation,  # usually None
             )
         else:
-
             self.mean_layer = build_mlp(
                 input_dim=trunk_hidden[-1],
                 output_dim=self.action_dim,
@@ -85,7 +83,9 @@ class ActorCritic(nn.Module):
             activation=activation,
         )
 
-    def act(self, obs, action=None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def act(
+        self, obs, action=None
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Compute the action, log-probability, entropy, and value for a given observation.
 
@@ -99,7 +99,6 @@ class ActorCritic(nn.Module):
             ent: entropy of the action distribution.
             value: value estimate from the critic.
         """
-
 
         features = self.trunk(obs)
 
@@ -126,7 +125,9 @@ class ActorCritic(nn.Module):
                 raw_a = raw_a.clamp(-0.999, +0.999)
 
             logp = dist.log_prob(raw_a).sum(-1)
-            ent = base.entropy().sum(-1)    # entropy of the base distribution, not implemented in the transform
+            ent = base.entropy().sum(
+                -1
+            )  # entropy on the base distribution, not implemented in the transform
 
             low, high = self.act_low.to(obs), self.act_high.to(obs)
             a = low + (raw_a + 1) * 0.5 * (high - low)

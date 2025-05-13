@@ -6,10 +6,14 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 from ppo.ppo import PPO
 from utils.logger import TensorBoardLogger
+from utils.seeding import set_seed, SeedWrapper
 
 
 def make_env(
-    env_name: str, norm_rewards: bool = True, env_kwargs: dict | None = None
+    env_name: str,
+    norm_rewards: bool = True,
+    seed: int | None = 42,
+    env_kwargs: dict | None = None,
 ) -> callable:
     """
     Returns a thunk that will create and wrap an env instance.
@@ -17,6 +21,7 @@ def make_env(
     Args:
         env_name: name of the gym environment, e.g. "CartPole-v1"
         norm_rewards: whether to apply NormalizeReward wrapper
+        seed: seed for the environment
         env_kwargs: any kwargs to forward into gym.make()
     """
     env_kwargs = env_kwargs or {}
@@ -27,6 +32,7 @@ def make_env(
         """
         env = gym.make(env_name, **env_kwargs)
         env = gym.wrappers.Autoreset(env)
+        env = SeedWrapper(env, seed)
         if norm_rewards:
             env = gym.wrappers.NormalizeReward(env)
         return env
@@ -39,15 +45,12 @@ class PPOTrainer:
     A class to train a PPO agent for a given config.
     """
 
-    def __init__(
-        self, config_path: str = "../configs/default.yaml", run_name: str | None = None
-    ) -> None:
+    def __init__(self, config_path: str = "../configs/default.yaml") -> None:
         """
         Initialise the PPOTrainer.
 
         Args:
             config_path: path to the configuration file
-            run_name: name of the run, if None a combination of env name and timestamp is used
         """
 
         # load hyperparameters and paths
@@ -57,6 +60,8 @@ class PPOTrainer:
         self.batch_size = self.num_envs * self.rollout_length
         self.num_epochs = self.cfg["training"]["max_steps"] // self.batch_size
         self.save_interval = self.cfg["training"]["save_interval"]
+        self.seed = self.cfg["training"]["seed"]
+        set_seed(self.seed)
 
         # create environment(s)
         self.train_envs = AsyncVectorEnv(
@@ -69,28 +74,22 @@ class PPOTrainer:
             ]
         )
 
+        # instantiate logger
+        self.run_name = f"{self.cfg['env']['name']}_{int(time.time())}"
+
+        self.log_dir = self.cfg["logging"]["log_dir"] + "/" + self.run_name
+        self.model_dir = self.cfg["training"]["model_dir"] + "/" + self.run_name
+
+        self.logger = TensorBoardLogger(log_dir=self.log_dir)
+        self.logger.log_hyperparams(self.cfg)
+
         # instantiate PPO agent
         self.ppo = PPO(
             obs_space=self.train_envs.single_observation_space,
             action_space=self.train_envs.single_action_space,
+            logger=self.logger,
             **self.cfg,
         )
-
-        # instantiate logger
-        self.run_name = (
-            f"{self.cfg['env']['name']}_{int(time.time())}"
-            if run_name is None
-            else run_name
-        )
-        self.log_dir = self.cfg["logging"]["log_dir"] + "/" + self.run_name
-        self.model_dir = self.cfg["training"]["model_dir"] + "/" + self.run_name
-
-        # if we are resuming a run, load the model
-        if run_name is not None:
-            self.ppo.load(self.model_dir)
-
-        self.logger = TensorBoardLogger(log_dir=self.log_dir)
-        self.logger.log_hyperparams(self.cfg)
 
     def train(self) -> None:
         """
@@ -99,37 +98,31 @@ class PPOTrainer:
         """
         best_reward = -float("inf")
         for i in tqdm(range(self.num_epochs), desc="Epoch"):
-            num_steps = i * self.num_envs * self.rollout_length
-
-            self.anneal_lr(i)
             self.ppo.buffer.reset_buffer()
             self.ppo.collect_rollouts(self.train_envs)
-            self.ppo.update(self.logger, num_steps)
-            eval_mean_reward = self.ppo.full_testing_episode(
-                self.eval_envs, self.logger, num_steps
-            )
+            self.ppo.update()
+            self.anneal_lr()
 
             if (i + 1) % self.save_interval == 0:
                 self.ppo.save(self.model_dir)
+
+            eval_mean_reward = self.ppo.evaluate_policy(self.eval_envs)
 
             if eval_mean_reward > best_reward:
                 best_reward = eval_mean_reward
                 self.ppo.save(self.model_dir, model_name="best_model.pth")
 
-    def anneal_lr(self, i) -> None:
-        """
-        Linearly anneal the learning rate according to the progress of training.
-
-        Args:
-            i: current epoch
-        """
-        for param_group in self.ppo.optimizer.param_groups:
-            if self.cfg["training"]["anneal_lr"]:
-                progress_ratio = (i + 1) / self.num_epochs
-                param_group["lr"] = self.cfg["training"]["lr"] * (1 - progress_ratio)
-            self.logger.log_scalar("lr", param_group["lr"], i)
+    def anneal_lr(self):
+        if self.cfg["training"]["anneal_lr"]:
+            self.ppo.lr_scheduler.step()
+            current_lr = self.ppo.lr_scheduler.get_last_lr()[0]
+            self.logger.log_scalar("lr", current_lr, self.ppo.global_step)
+        else:
+            self.logger.log_scalar(
+                "lr", self.cfg["training"]["lr"], self.ppo.global_step
+            )
 
 
 if __name__ == "__main__":
-    trainer = PPOTrainer(run_name="CartPole-v1_1747065702")
+    trainer = PPOTrainer()
     trainer.train()

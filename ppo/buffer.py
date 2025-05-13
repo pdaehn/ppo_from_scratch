@@ -1,7 +1,6 @@
 import torch
 from gymnasium.spaces import Discrete, Box
 from torch import Tensor
-from torch.cuda import device
 
 
 class RolloutBuffer:
@@ -20,7 +19,7 @@ class RolloutBuffer:
         gae_lambda: float,
         num_envs: int,
         rollout_length: int,
-        device: device = torch.device("cpu"),
+        device: torch.device = torch.device("cpu"),
     ):
         """
         Initialise the rollout buffer.
@@ -33,7 +32,18 @@ class RolloutBuffer:
             num_envs: number of parallel environments.
             rollout_length: length of the rollout.
             device: device to store the buffer on (default: cpu).
+
+        Attributes (all Tensors on `self.device`):
+            obs_buf:    shape (T, B, *obs_space.shape)
+            act_buf:    shape (T, B, *action_space.shape)
+            logp_buf:   shape (T, B)
+            rew_buf:    shape (T, B)
+            val_buf:    shape (T, B)
+            done_buf:   shape (T, B)
+            ret_buf:    shape (T, B)
+            adv_buf:    shape (T, B)
         """
+
         self.num_envs = num_envs
         self.rollout_length = rollout_length
         self.obs_space = obs_space
@@ -42,7 +52,7 @@ class RolloutBuffer:
         self.gae_lambda = gae_lambda
         self.device = device
 
-        B, T = self.num_envs, self.rollout_length
+        T, B = self.rollout_length, self.num_envs
 
         self.obs_shape = (T, B, *obs_space.shape)
         self.act_shape = (T, B, *action_space.shape)
@@ -78,57 +88,64 @@ class RolloutBuffer:
             done: done flag indicating if the episode has ended.
             value: value estimate from the critic.
         """
+
+        if self.ptr > self.rollout_length - 1:
+            raise RuntimeError(
+                "Rollout buffer is full. Please call compute_gae() before adding more transitions."
+            )
+
         self.obs_buf[self.ptr] = obs
         self.act_buf[self.ptr] = action
         self.logp_buf[self.ptr] = logp
         self.rew_buf[self.ptr] = reward
         self.val_buf[self.ptr] = value
         self.done_buf[self.ptr] = done
+
         self.ptr += 1
 
     def reset_buffer(self) -> None:
         """
         Reset the buffer to its initial state.
         """
-        self.obs_buf = torch.zeros_like(self.obs_buf, device=self.device)
-        self.act_buf = torch.zeros_like(self.act_buf, device=self.device)
-        self.logp_buf = torch.zeros_like(self.logp_buf, device=self.device)
-        self.rew_buf = torch.zeros_like(self.rew_buf, device=self.device)
-        self.val_buf = torch.zeros_like(self.val_buf, device=self.device)
-        self.done_buf = torch.zeros_like(self.done_buf, device=self.device)
-        self.ret_buf = torch.zeros_like(self.ret_buf, device=self.device)
-        self.adv_buf = torch.zeros_like(self.adv_buf, device=self.device)
+        self.obs_buf.zero_()
+        self.act_buf.zero_()
+        self.logp_buf.zero_()
+        self.rew_buf.zero_()
+        self.val_buf.zero_()
+        self.done_buf.zero_()
+        self.adv_buf.zero_()
+        self.ret_buf.zero_()
 
         self.ptr = 0
 
-    def compute_gae(self, final_vals: Tensor) -> None:
+    def compute_gae(self, bootstrap_value: Tensor) -> None:
         """
-        Compute the Generalized Advantage Estimation (GAE) for the buffer.
-        This is done in a backward pass through the buffer.
+        Fill `self.adv_buf` and `self.ret_buf` in-place.
 
-        Args:
-              final_vals: final value estimates, for the last observation, which is not in the buffer.
+        `bootstrap_value` is V(s_{T}) – the critic’s estimate for the first
+        unseen state (i.e. the observation after the last stored transition).
         """
-        B, T = self.num_envs, self.rollout_length
-
-        lastgaelam = torch.zeros(B, device=self.device)
+        T, B = self.rollout_length, self.num_envs
+        advantages = torch.zeros(T, B, device=self.device)
+        last_adv = torch.zeros(B, device=self.device)
 
         for t in reversed(range(T)):
             if t == T - 1:
-                nextnonterminal = 1.0
-                nextvalues = final_vals
+                next_non_terminal = 1.0 - self.done_buf[t]
+                next_value = bootstrap_value
             else:
-                nextnonterminal = 1.0 - self.done_buf[t + 1]
-                nextvalues = self.val_buf[t + 1]
+                next_non_terminal = 1.0 - self.done_buf[t]
+                next_value = self.val_buf[t + 1]
 
             delta = (
                 self.rew_buf[t]
-                + self.gamma * nextvalues * nextnonterminal
+                + self.gamma * next_value * next_non_terminal
                 - self.val_buf[t]
             )
-            lastgaelam = (
-                delta + self.gamma * self.gae_lambda * nextnonterminal * lastgaelam
+            last_adv = (
+                delta + self.gamma * self.gae_lambda * next_non_terminal * last_adv
             )
-            self.adv_buf[t] = lastgaelam
+            advantages[t] = last_adv
 
-        self.ret_buf = self.adv_buf + self.val_buf
+        self.adv_buf = advantages
+        self.ret_buf = advantages + self.val_buf
