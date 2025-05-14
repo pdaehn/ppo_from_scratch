@@ -82,12 +82,12 @@ class RolloutBuffer:
         Add a transition to the buffer.
 
         Args:
-            obs: observation from the environment.
-            action: action taken by the agent.
+            obs: observation from the environment, timestep t.
+            action: action taken by the agent, taken from state_t to state_t+1.
             logp: log probability of the action taken.
             reward: reward received from the environment.
-            done: done flag indicating if the episode has ended.
-            value: value estimate from the critic.
+            done: done flag indicating if the episode has ended, whether the action taken (into state_t+1) ended the episode.
+            value: value estimate from the critic, timestep t.
         """
 
         if self.ptr >= self.rollout_length:

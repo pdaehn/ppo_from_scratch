@@ -6,7 +6,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 
 class TensorBoardLogger:
-    def __init__(self, log_dir: str) -> None:
+    def __init__(self, log_dir: str | Path) -> None:
         """
         Initialise a TensorBoard SummaryWriter.
 

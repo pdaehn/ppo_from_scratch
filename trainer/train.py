@@ -1,6 +1,6 @@
 # trainer/train.py
-import os
 import time
+from pathlib import Path
 
 import gymnasium as gym
 import imageio
@@ -86,8 +86,8 @@ class PPOTrainer:
         # instantiate logger
         self.run_name = f"{self.cfg['env']['name']}_{int(time.time())}"
 
-        self.log_dir = self.cfg["logging"]["log_dir"] + "/" + self.run_name
-        self.model_dir = self.cfg["training"]["model_dir"] + "/" + self.run_name
+        self.log_dir = Path(self.cfg["logging"]["log_dir"]) / self.run_name
+        self.model_dir = Path(self.cfg["training"]["model_dir"]) / self.run_name
 
         self.logger = TensorBoardLogger(log_dir=self.log_dir)
         self.logger.log_hyperparams(self.cfg)
@@ -133,7 +133,7 @@ class PPOTrainer:
 
     def render_policy_eval_gif(
         self,
-        output_dir: str = "gifs",
+        output_dir: Path = "gifs",
         fps: int = 30,
     ):
         """
@@ -142,10 +142,8 @@ class PPOTrainer:
             output_dir: directory to save the GIF
             fps: frames per second for the GIF
         """
-
-        output_dir = os.path.join(output_dir, self.run_name)
-        output_dir = os.path.join(output_dir, "policy_eval.gif")
-        os.makedirs(os.path.dirname(output_dir) or ".", exist_ok=True)
+        output_dir = Path(output_dir) / self.run_name / "policy_eval.gif"
+        output_dir.parent.mkdir(parents=True, exist_ok=True)
 
         env_thunk = make_env(
             self.cfg["env"]["name"],

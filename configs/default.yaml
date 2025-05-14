@@ -1,5 +1,5 @@
 env:
-  name: Pendulum-v1
+  name: Acrobot-v1
 
 ppo:
   gamma: 0.99

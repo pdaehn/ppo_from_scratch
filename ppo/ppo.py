@@ -1,12 +1,10 @@
-import os
-from typing import Any
+from pathlib import Path
 
 import numpy as np
 import torch
-from gymnasium import Space
+from gymnasium import Env, Space
 from gymnasium.spaces import Box, Discrete
 from gymnasium.vector import AsyncVectorEnv, SyncVectorEnv
-from numpy import floating
 from torch.optim.lr_scheduler import LambdaLR
 
 from ppo.buffer import RolloutBuffer
@@ -265,7 +263,7 @@ class PPO:
         self.logger.log_scalar("eval/mean_reward", mean_reward, self.global_step)
         return mean_reward
 
-    def save(self, path: str, model_name: str | None = None) -> None:
+    def save(self, path: Path, model_name: str | None = None) -> None:
         """
         Save the model to the specified path.
 
@@ -273,15 +271,14 @@ class PPO:
             path: The directory where the model will be saved.
             model_name: The name of the model file. If None, a default name will be generated.
         """
-        if not os.path.exists(path):
-            os.makedirs(path)
+        path.mkdir(parents=True, exist_ok=True)
 
-        saved_count = len(os.listdir(path))
+        saved_count = len(list(path.iterdir()))
         model_name = (
             f"ppo_model_{saved_count}.pth" if model_name is None else model_name
         )
 
-        save_path = os.path.join(path, model_name)
+        save_path = path / model_name
 
         if self.discrete_act_space:
             torch.save(
@@ -306,7 +303,7 @@ class PPO:
                 save_path,
             )
 
-    def load(self, path: str) -> None:
+    def load(self, path: Path) -> None:
         """
         Load the latest model from the specified path.
 
@@ -314,16 +311,16 @@ class PPO:
             path: The directory where the model is saved.
         """
 
-        if not os.path.exists(path):
+        if not path.exists():
             raise FileNotFoundError(f"Model path {path} does not exist")
 
-        if len(os.listdir(path)) == 0:
+        if any(path.iterdir()):
             print("No models found in the directory, starting from scratch.")
             return
 
-        model_files = os.listdir(path)
+        model_files = [model for model in path.iterdir() if model.is_file()]
         model_files.sort(key=lambda x: int(x.split("_")[-1].split(".")[0]))
-        path = os.path.join(path, model_files[-1])
+        path = path / model_files[-1]
 
         checkpoint = torch.load(path, map_location=self.device)
 
@@ -339,7 +336,7 @@ class PPO:
             )
             self.actor_critic.trunk.load_state_dict(checkpoint["trunk"])
 
-    def rollout_gif(self, env) -> list[np.ndarray]:
+    def rollout_gif(self, env: Env) -> list[np.ndarray]:
         """
         Generate GIF frames of the agent's rollout in the environment.
 
