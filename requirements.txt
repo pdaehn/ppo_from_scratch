@@ -4,3 +4,4 @@ gymnasium~=1.1.1
 omegaconf~=2.3.0
 imageio~=2.37.0
 tqdm~=4.67.1
+tensorboard~=2.19.0
