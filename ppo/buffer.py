@@ -1,6 +1,6 @@
 import torch
 from gymnasium import Space
-from gymnasium.spaces import Discrete, Box
+from gymnasium.spaces import Box, Discrete
 from torch import Tensor
 
 
@@ -90,7 +90,7 @@ class RolloutBuffer:
             value: value estimate from the critic.
         """
 
-        if self.ptr > self.rollout_length - 1:
+        if self.ptr >= self.rollout_length:
             raise RuntimeError(
                 "Rollout buffer is full. Please call compute_gae() before adding more transitions."
             )

@@ -1,13 +1,12 @@
 import os
+from typing import Any
+
 import numpy as np
 import torch
 from gymnasium import Space
-from gymnasium.spaces import Discrete, Box
+from gymnasium.spaces import Box, Discrete
 from gymnasium.vector import AsyncVectorEnv, SyncVectorEnv
-
 from numpy import floating
-from typing import Any
-
 from torch.optim.lr_scheduler import LambdaLR
 
 from ppo.buffer import RolloutBuffer
@@ -57,6 +56,15 @@ class PPO:
 
         self.discrete_act_space = isinstance(action_space, Discrete)
 
+        if self.discrete_act_space:
+            self.action_dim = action_space.n
+        else:
+            self.action_dim = action_space.shape[0]
+
+        self.ent_coef = (
+            self.ent_coef / self.action_dim
+        )  # normalize entropy coefficient by action dimension
+
         self.actor_critic = ActorCritic(obs_space, action_space, **cfg["model"]).to(
             self.device
         )
@@ -92,7 +100,8 @@ class PPO:
         Args:
             envs: the environment to collect rollouts from.
         """
-        obs = torch.tensor(envs.reset()[0], dtype=torch.float32, device=self.device)
+        obs, _ = envs.reset()
+        obs = torch.tensor(obs, dtype=torch.float32, device=self.device)
 
         for _ in range(self.rollout_length):
             with torch.no_grad():
@@ -168,7 +177,7 @@ class PPO:
                 # surrogate policy loss
                 surr1 = ratio * adv_mb
                 surr2 = (
-                        ratio.clamp(1 - self.clip_epsilon, 1 + self.clip_epsilon) * adv_mb
+                    ratio.clamp(1 - self.clip_epsilon, 1 + self.clip_epsilon) * adv_mb
                 )
                 policy_loss = -torch.min(surr1, surr2).mean()
 
@@ -176,17 +185,15 @@ class PPO:
 
                 if self.value_clipping:
                     old_val_mb = old_value_b[mb]
-                    v_clipped = old_val_mb + (new_value - old_val_mb) \
-                        .clamp(-self.clip_epsilon,
-                               +self.clip_epsilon)
+                    v_clipped = old_val_mb + (new_value - old_val_mb).clamp(
+                        -self.clip_epsilon, +self.clip_epsilon
+                    )
 
                     unclipped_vf_loss = (new_value - ret_b[mb]).pow(2)
                     clipped_vf_loss = (v_clipped - ret_b[mb]).pow(2)
 
-                    value_loss = torch.max(unclipped_vf_loss,
-                                                clipped_vf_loss).mean()
+                    value_loss = torch.max(unclipped_vf_loss, clipped_vf_loss).mean()
                 else:
-
                     value_loss = (new_value - ret_b[mb]).pow(2).mean()
 
                 # entropy loss
@@ -226,9 +233,9 @@ class PPO:
             "loss",
         )
 
-    def evaluate_policy(self, envs: SyncVectorEnv) -> float:
+    def eval_mean_reward(self, envs: SyncVectorEnv) -> float:
         """
-        Evaluate the agent in the environment for a full episode.
+        Evaluate the agent in the environment for a full episode and return the mean reward.
 
         Args:
             envs: the environment to evaluate the agent in.
@@ -236,13 +243,12 @@ class PPO:
         Returns:
             mean_reward: the mean reward obtained during the evaluation.
         """
-        next_obs = torch.tensor(
-            envs.reset()[0], dtype=torch.float32, device=self.device
-        )
+        next_obs, _ = envs.reset()
+        next_obs = torch.tensor(next_obs, dtype=torch.float32, device=self.device)
         dones = np.zeros(next_obs.size(0), dtype=np.float32)
         rewards = np.zeros(next_obs.size(0), dtype=np.float32)
 
-        for i in range(self.rollout_length):
+        while not dones.all():
             with torch.no_grad():
                 action, *_ = self.actor_critic.act(next_obs)
 
@@ -250,9 +256,6 @@ class PPO:
                 action.cpu().numpy()
             )
             next_dones = np.logical_or(termination, truncation)
-
-            if dones.all():
-                break
 
             rewards += reward * (1 - dones)
             dones = np.logical_or(dones, next_dones)
@@ -336,3 +339,29 @@ class PPO:
             )
             self.actor_critic.trunk.load_state_dict(checkpoint["trunk"])
 
+    def rollout_gif(self, env) -> list[np.ndarray]:
+        """
+        Generate GIF frames of the agent's rollout in the environment.
+
+        Args:
+            env: the environment to generate the GIF from.
+        """
+        frames = []
+        obs, _ = env.reset()
+        obs = torch.tensor(obs, dtype=torch.float32, device=self.device)
+        done = False
+
+        while not done:
+            with torch.no_grad():
+                action, *_ = self.actor_critic.act(obs)
+
+            obs_np, _, term, trunc, _ = env.step(action.cpu().numpy())
+            frame = env.render()
+            frames.append(frame)
+
+            done = bool(term or trunc)
+            obs = torch.tensor(obs_np, dtype=torch.float32, device=self.device)
+
+        env.close()
+
+        return frames

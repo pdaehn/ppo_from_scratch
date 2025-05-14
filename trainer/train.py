@@ -1,18 +1,16 @@
 # trainer/train.py
 import os
-import random
 import time
+
 import gymnasium as gym
 import imageio
-import numpy as np
-import torch
 from gymnasium.vector import AsyncVectorEnv, SyncVectorEnv
-from gymnasium.wrappers import RecordVideo
 from omegaconf import OmegaConf
 from tqdm import tqdm
+
 from ppo.ppo import PPO
 from utils.logger import TensorBoardLogger
-from utils.seeding import set_seed, SeedWrapper
+from utils.seeding import SeedWrapper, set_seed
 
 
 def make_env(
@@ -112,18 +110,18 @@ class PPOTrainer:
             self.ppo.buffer.reset_buffer()
             self.ppo.collect_rollouts(self.train_envs)
             self.ppo.update()
-            self.anneal_lr()
+            self.step_lr()
 
             if (i + 1) % self.save_interval == 0:
                 self.ppo.save(self.model_dir)
 
-            eval_mean_reward = self.ppo.evaluate_policy(self.eval_envs)
+            eval_mean_reward = self.ppo.eval_mean_reward(self.eval_envs)
 
             if eval_mean_reward > best_reward:
                 best_reward = eval_mean_reward
                 self.ppo.save(self.model_dir, model_name="best_model.pth")
 
-    def anneal_lr(self):
+    def step_lr(self):
         if self.cfg["training"]["anneal_lr"]:
             self.ppo.lr_scheduler.step()
             current_lr = self.ppo.lr_scheduler.get_last_lr()[0]
@@ -134,10 +132,16 @@ class PPOTrainer:
             )
 
     def render_policy_eval_gif(
-            self,
-            output_dir: str = "gifs",
-            fps: int = 30,
+        self,
+        output_dir: str = "gifs",
+        fps: int = 30,
     ):
+        """
+        Render the policy evaluation as a GIF.
+        Args:
+            output_dir: directory to save the GIF
+            fps: frames per second for the GIF
+        """
 
         output_dir = os.path.join(output_dir, self.run_name)
         output_dir = os.path.join(output_dir, "policy_eval.gif")
@@ -151,23 +155,7 @@ class PPOTrainer:
         )
         env = env_thunk()
 
-        frames = []
-        obs, _ = env.reset(seed=self.seed)
-        obs = torch.tensor(obs, dtype=torch.float32, device=self.ppo.device)
-        done = False
-
-        while not done:
-            with torch.no_grad():
-                action, *_ = self.ppo.actor_critic.act(obs)
-
-            obs_np, _, term, trunc, _ = env.step(action.cpu().numpy())
-            frame = env.render()
-            frames.append(frame)
-
-            done = bool(term or trunc)
-            obs = torch.tensor(obs_np, dtype=torch.float32, device=self.ppo.device)
-
-        env.close()
+        frames = self.ppo.rollout_gif(env)
 
         imageio.mimsave(output_dir, frames, format="GIF", duration=1 / fps)
 
