@@ -23,8 +23,8 @@ def build_mlp(
         input_dim: dimension of the input layer.
         output_dim: dimension of the output layer.
         hidden_sizes: list of integers specifying the sizes of hidden layers.
-        activation: activation function to use for hidden layers (default: "tanh").
-        output_activation: activation function to use for the output layer (default: None).
+        activation: activation function to use for hidden layers.
+        output_activation: activation function to use for the output layer.
     """
     act_cls = _ACTIVATIONS[activation]
     out_act_cls = _ACTIVATIONS.get(output_activation, None)

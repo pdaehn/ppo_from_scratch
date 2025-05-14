@@ -11,7 +11,7 @@ ppo:
   norm_adv: True
 
 training:
-  max_steps: 1_000_000
+  max_steps: 500_000
   save_interval: 20
   rollout_length: 2048
   minibatch_size: 64
@@ -21,6 +21,7 @@ training:
   anneal_lr: True
   model_dir: ./models
   seed: 0
+  gif_dir: ./gifs
 
 model:
   trunk_hidden: [64, 64]

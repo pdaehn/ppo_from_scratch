@@ -43,7 +43,7 @@ class SeedWrapper(gym.Wrapper):
 
         Args:
             seed: the seed value to set for the environment.
-            **kwargs: additional keyword arguments to pass to the reset method to match the
+            **kwargs: additional keyword arguments to pass to the reset method to match
                 signature of the original environment's reset method.
         """
 

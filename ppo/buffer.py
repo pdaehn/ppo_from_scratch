@@ -1,6 +1,5 @@
 import torch
 from gymnasium import Space
-from gymnasium.spaces import Box, Discrete
 from torch import Tensor
 
 
@@ -14,8 +13,8 @@ class RolloutBuffer:
 
     def __init__(
         self,
-        obs_space: Space[Box | Discrete],
-        action_space: Space[Box | Discrete],
+        obs_space: Space,
+        action_space: Space,
         gamma: float,
         gae_lambda: float,
         num_envs: int,
@@ -86,14 +85,13 @@ class RolloutBuffer:
             action: action taken by the agent, taken from state_t to state_t+1.
             logp: log probability of the action taken.
             reward: reward received from the environment.
-            done: done flag indicating if the episode has ended, whether the action taken (into state_t+1) ended the episode.
+            done: done flag indicating if the episode has ended,
+             whether the action taken (into state_t+1) ended the episode.
             value: value estimate from the critic, timestep t.
         """
 
         if self.ptr >= self.rollout_length:
-            raise RuntimeError(
-                "Rollout buffer is full. Please call compute_gae() before adding more transitions."
-            )
+            raise RuntimeError("Rollout buffer is full, cannot add more transitions.")
 
         self.obs_buf[self.ptr] = obs
         self.act_buf[self.ptr] = action

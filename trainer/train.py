@@ -88,6 +88,7 @@ class PPOTrainer:
 
         self.log_dir = Path(self.cfg["logging"]["log_dir"]) / self.run_name
         self.model_dir = Path(self.cfg["training"]["model_dir"]) / self.run_name
+        self.gif_dir = Path(self.cfg["training"]["gif_dir"]) / self.run_name
 
         self.logger = TensorBoardLogger(log_dir=self.log_dir)
         self.logger.log_hyperparams(self.cfg)
@@ -133,16 +134,14 @@ class PPOTrainer:
 
     def render_policy_eval_gif(
         self,
-        output_dir: Path = "gifs",
         fps: int = 30,
     ):
         """
         Render the policy evaluation as a GIF.
         Args:
-            output_dir: directory to save the GIF
             fps: frames per second for the GIF
         """
-        output_dir = Path(output_dir) / self.run_name / "policy_eval.gif"
+        output_dir = Path(self.gif_dir) / "policy_eval.gif"
         output_dir.parent.mkdir(parents=True, exist_ok=True)
 
         env_thunk = make_env(

@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from gymnasium import Env, Space
-from gymnasium.spaces import Box, Discrete
+from gymnasium.spaces import Discrete
 from gymnasium.vector import AsyncVectorEnv, SyncVectorEnv
 from torch.optim.lr_scheduler import LambdaLR
 
@@ -16,14 +16,16 @@ class PPO:
     """
     Proximal Policy Optimization (PPO) agent.
 
-    This class implements the PPO algorithm for training an agent in a reinforcement learning environment.
-    It collects rollouts, updates the policy and value networks, evaluates the agent, and handles model saving/loading.
+    This class implements the PPO algorithm for training
+     an agent in a reinforcement learning environment.
+    It collects rollouts, updates the policy and value networks,
+     evaluates the agent, and handles model saving/loading.
     """
 
     def __init__(
         self,
-        obs_space: Space[Box | Discrete],
-        action_space: Space[Box | Discrete],
+        obs_space: Space,
+        action_space: Space,
         logger: TensorBoardLogger,
         **cfg,
     ) -> None:
@@ -233,7 +235,7 @@ class PPO:
 
     def eval_mean_reward(self, envs: SyncVectorEnv) -> float:
         """
-        Evaluate the agent in the environment for a full episode and return the mean reward.
+        Evaluate agent in the environment for a full episode and return the mean reward.
 
         Args:
             envs: the environment to evaluate the agent in.
@@ -269,7 +271,7 @@ class PPO:
 
         Args:
             path: The directory where the model will be saved.
-            model_name: The name of the model file. If None, a default name will be generated.
+            model_name: The name of the model file. If None, a name will be generated.
         """
         path.mkdir(parents=True, exist_ok=True)
 
