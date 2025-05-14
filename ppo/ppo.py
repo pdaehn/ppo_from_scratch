@@ -43,6 +43,7 @@ class PPO:
         self.logger = logger
 
         self.clip_epsilon = cfg["ppo"]["clip_epsilon"]
+        self.value_clipping = cfg["ppo"]["value_clip"]
         self.vf_coef = cfg["ppo"]["vf_coef"]
         self.ent_coef = cfg["ppo"]["ent_coef"]
         self.norm_adv = cfg["ppo"]["norm_adv"]
@@ -100,7 +101,7 @@ class PPO:
             next_obs, reward, termination, truncation, _ = envs.step(
                 action.cpu().numpy()
             )
-            done = torch.tensor(
+            next_done = torch.tensor(
                 np.logical_or(termination, truncation),
                 dtype=torch.float32,
                 device=self.device,
@@ -109,7 +110,7 @@ class PPO:
             next_obs = torch.tensor(next_obs, dtype=torch.float32, device=self.device)
             reward = torch.tensor(reward, dtype=torch.float32, device=self.device)
 
-            self.buffer.add_transition(obs, action, logp, reward, done, value)
+            self.buffer.add_transition(obs, action, logp, reward, next_done, value)
 
             obs = next_obs
 
@@ -145,6 +146,7 @@ class PPO:
             logp_b = self.buffer.logp_buf.view(-1)
             adv_b = self.buffer.adv_buf.view(-1)
             ret_b = self.buffer.ret_buf.view(-1)
+            old_value_b = self.buffer.val_buf.view(-1)
 
             adv_b_mean = torch.mean(adv_b)
             adv_b_std = torch.std(adv_b)
@@ -166,12 +168,26 @@ class PPO:
                 # surrogate policy loss
                 surr1 = ratio * adv_mb
                 surr2 = (
-                    ratio.clamp(1 - self.clip_epsilon, 1 + self.clip_epsilon) * adv_mb
+                        ratio.clamp(1 - self.clip_epsilon, 1 + self.clip_epsilon) * adv_mb
                 )
                 policy_loss = -torch.min(surr1, surr2).mean()
 
                 # value loss
-                value_loss = (new_value - ret_b[mb]).pow(2).mean()
+
+                if self.value_clipping:
+                    old_val_mb = old_value_b[mb]
+                    v_clipped = old_val_mb + (new_value - old_val_mb) \
+                        .clamp(-self.clip_epsilon,
+                               +self.clip_epsilon)
+
+                    unclipped_vf_loss = (new_value - ret_b[mb]).pow(2)
+                    clipped_vf_loss = (v_clipped - ret_b[mb]).pow(2)
+
+                    value_loss = torch.max(unclipped_vf_loss,
+                                                clipped_vf_loss).mean()
+                else:
+
+                    value_loss = (new_value - ret_b[mb]).pow(2).mean()
 
                 # entropy loss
                 entropy_loss = -entropy.mean()
@@ -210,7 +226,7 @@ class PPO:
             "loss",
         )
 
-    def evaluate_policy(self, envs: SyncVectorEnv) -> floating[Any]:
+    def evaluate_policy(self, envs: SyncVectorEnv) -> float:
         """
         Evaluate the agent in the environment for a full episode.
 
@@ -228,7 +244,7 @@ class PPO:
 
         for i in range(self.rollout_length):
             with torch.no_grad():
-                action, _, _, _ = self.actor_critic.act(next_obs)
+                action, *_ = self.actor_critic.act(next_obs)
 
             next_obs, reward, termination, truncation, _ = envs.step(
                 action.cpu().numpy()
@@ -242,7 +258,7 @@ class PPO:
             dones = np.logical_or(dones, next_dones)
             next_obs = torch.tensor(next_obs, dtype=torch.float32, device=self.device)
 
-        mean_reward = np.mean(rewards)
+        mean_reward = float(np.mean(rewards))
         self.logger.log_scalar("eval/mean_reward", mean_reward, self.global_step)
         return mean_reward
 
@@ -319,3 +335,4 @@ class PPO:
                 checkpoint["log_param"], device=self.device
             )
             self.actor_critic.trunk.load_state_dict(checkpoint["trunk"])
+

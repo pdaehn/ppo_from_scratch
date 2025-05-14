@@ -1,4 +1,5 @@
 import torch
+from gymnasium import Space
 from gymnasium.spaces import Discrete, Box
 from torch import Tensor
 
@@ -13,8 +14,8 @@ class RolloutBuffer:
 
     def __init__(
         self,
-        obs_space: Box | Discrete,
-        action_space: Box | Discrete,
+        obs_space: Space[Box | Discrete],
+        action_space: Space[Box | Discrete],
         gamma: float,
         gae_lambda: float,
         num_envs: int,

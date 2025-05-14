@@ -29,7 +29,8 @@ class SeedWrapper(gym.Wrapper):
             seed: the seed value to set for the environment.
         """
         super().__init__(env)
-        self._seed = seed
+        seed_sequence = np.random.SeedSequence(seed)
+        self._rng = np.random.default_rng(seed_sequence)
 
     def reset(self, seed: int = None, **kwargs):
         """
@@ -43,5 +44,6 @@ class SeedWrapper(gym.Wrapper):
         """
 
         if seed is None:
-            return self.env.reset(seed=self._seed)
+            child_seed = int(self._rng.integers(0, 2**32))
+            return self.env.reset(seed=child_seed)
         return self.env.reset(seed=seed)

@@ -1,7 +1,13 @@
 # trainer/train.py
+import os
+import random
 import time
 import gymnasium as gym
+import imageio
+import numpy as np
+import torch
 from gymnasium.vector import AsyncVectorEnv, SyncVectorEnv
+from gymnasium.wrappers import RecordVideo
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from ppo.ppo import PPO
@@ -65,12 +71,17 @@ class PPOTrainer:
 
         # create environment(s)
         self.train_envs = AsyncVectorEnv(
-            [make_env(self.cfg["env"]["name"]) for _ in range(self.num_envs)]
+            [
+                make_env(self.cfg["env"]["name"], seed=self.seed + i)
+                for i in range(self.num_envs)
+            ]
         )
         self.eval_envs = SyncVectorEnv(
             [
-                make_env(self.cfg["env"]["name"], norm_rewards=False)
-                for _ in range(self.num_envs)
+                make_env(
+                    self.cfg["env"]["name"], norm_rewards=False, seed=self.seed + i
+                )
+                for i in range(self.num_envs)
             ]
         )
 
@@ -122,7 +133,46 @@ class PPOTrainer:
                 "lr", self.cfg["training"]["lr"], self.ppo.global_step
             )
 
+    def render_policy_eval_gif(
+            self,
+            output_dir: str = "gifs",
+            fps: int = 30,
+    ):
+
+        output_dir = os.path.join(output_dir, self.run_name)
+        output_dir = os.path.join(output_dir, "policy_eval.gif")
+        os.makedirs(os.path.dirname(output_dir) or ".", exist_ok=True)
+
+        env_thunk = make_env(
+            self.cfg["env"]["name"],
+            norm_rewards=self.cfg["env"].get("norm_rewards", True),
+            seed=self.seed,
+            env_kwargs={"render_mode": "rgb_array"},
+        )
+        env = env_thunk()
+
+        frames = []
+        obs, _ = env.reset(seed=self.seed)
+        obs = torch.tensor(obs, dtype=torch.float32, device=self.ppo.device)
+        done = False
+
+        while not done:
+            with torch.no_grad():
+                action, *_ = self.ppo.actor_critic.act(obs)
+
+            obs_np, _, term, trunc, _ = env.step(action.cpu().numpy())
+            frame = env.render()
+            frames.append(frame)
+
+            done = bool(term or trunc)
+            obs = torch.tensor(obs_np, dtype=torch.float32, device=self.ppo.device)
+
+        env.close()
+
+        imageio.mimsave(output_dir, frames, format="GIF", duration=1 / fps)
+
 
 if __name__ == "__main__":
     trainer = PPOTrainer()
     trainer.train()
+    trainer.render_policy_eval_gif()
