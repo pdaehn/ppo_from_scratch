@@ -14,7 +14,6 @@ from utils.seeding import SeedWrapper, set_seed
 
 
 def make_env(
-    env_name: str,
     norm_rewards: bool = True,
     seed: int | None = 42,
     env_kwargs: dict | None = None,
@@ -23,7 +22,6 @@ def make_env(
     Returns a thunk that will create and wrap an env instance.
 
     Args:
-        env_name: name of the gym environment, e.g. "CartPole-v1"
         norm_rewards: whether to apply NormalizeReward wrapper
         seed: seed for the environment
         env_kwargs: any kwargs to forward into gym.make()
@@ -34,7 +32,7 @@ def make_env(
         """
         Create and wrap the environment.
         """
-        env = gym.make(env_name, **env_kwargs)
+        env = gym.make(**env_kwargs)
         env = gym.wrappers.Autoreset(env)
         env = SeedWrapper(env, seed)
         if norm_rewards:
@@ -49,13 +47,17 @@ class PPOTrainer:
     A class to train a PPO agent for a given config.
     """
 
-    def __init__(self, config_path: str = "../configs/default.yaml") -> None:
+    def __init__(self, config_path: Path | None = None) -> None:
         """
         Initialise the PPOTrainer.
 
         Args:
             config_path: path to the configuration file
         """
+
+        if config_path is None:
+            pkg_root = Path(__file__).resolve().parent.parent
+            config_path = pkg_root / "configs" / "default.yaml"
 
         # load hyperparameters and paths
         self.cfg = OmegaConf.load(config_path)
@@ -70,21 +72,21 @@ class PPOTrainer:
         # create environment(s)
         self.train_envs = AsyncVectorEnv(
             [
-                make_env(self.cfg["env"]["name"], seed=self.seed + i)
+                make_env(seed=self.seed + i, env_kwargs=self.cfg["env"])
                 for i in range(self.num_envs)
             ]
         )
         self.eval_envs = SyncVectorEnv(
             [
                 make_env(
-                    self.cfg["env"]["name"], norm_rewards=False, seed=self.seed + i
+                    norm_rewards=False, seed=self.seed + i, env_kwargs=self.cfg["env"]
                 )
                 for i in range(self.num_envs)
             ]
         )
 
         # instantiate logger
-        self.run_name = f"{self.cfg['env']['name']}_{int(time.time())}"
+        self.run_name = f"{self.cfg['env']['id']}_{int(time.time())}"
 
         self.log_dir = Path(self.cfg["logging"]["log_dir"]) / self.run_name
         self.model_dir = Path(self.cfg["training"]["model_dir"]) / self.run_name
@@ -144,17 +146,19 @@ class PPOTrainer:
         output_dir = Path(self.gif_dir) / "policy_eval.gif"
         output_dir.parent.mkdir(parents=True, exist_ok=True)
 
+        env_kwargs = self.cfg["env"]
+        env_kwargs["render_mode"] = "rgb_array"
+
         env_thunk = make_env(
-            self.cfg["env"]["name"],
             norm_rewards=self.cfg["env"].get("norm_rewards", True),
             seed=self.seed,
-            env_kwargs={"render_mode": "rgb_array"},
+            env_kwargs=env_kwargs,
         )
         env = env_thunk()
 
         frames = self.ppo.rollout_gif(env)
 
-        imageio.mimsave(output_dir, frames, format="GIF", duration=1 / fps)
+        imageio.mimsave(output_dir, frames, format="GIF", duration=1 / fps, loop=0)
 
 
 if __name__ == "__main__":

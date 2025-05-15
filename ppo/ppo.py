@@ -297,8 +297,9 @@ class PPO:
             torch.save(
                 {
                     "mean_layer": self.actor_critic.mean_layer.state_dict(),
-                    "log_param": self.actor_critic.log_std.detach().cpu().numpy(),
+                    "log_param": self.actor_critic.log_std.detach().cpu(),
                     "trunk": self.actor_critic.trunk.state_dict(),
+                    "critic": self.actor_critic.critic.state_dict(),
                     "optimizer": self.optimizer.state_dict(),
                     "config": self.cfg,
                 },
@@ -316,12 +317,13 @@ class PPO:
         if not path.exists():
             raise FileNotFoundError(f"Model path {path} does not exist")
 
-        if any(path.iterdir()):
+        if not any(path.iterdir()):
             print("No models found in the directory, starting from scratch.")
             return
 
-        model_files = [model for model in path.iterdir() if model.is_file()]
-        model_files.sort(key=lambda x: int(x.split("_")[-1].split(".")[0]))
+        model_files = [p for p in path.iterdir() if p.is_file() and p.suffix == ".pth"]
+        model_files.sort(key=lambda p: int(p.stem.split("_")[-1]))
+
         path = path / model_files[-1]
 
         checkpoint = torch.load(path, map_location=self.device)
@@ -330,13 +332,22 @@ class PPO:
             self.actor_critic.actor.load_state_dict(checkpoint["actor"])
             self.actor_critic.critic.load_state_dict(checkpoint["critic"])
             self.actor_critic.trunk.load_state_dict(checkpoint["trunk"])
+            self.optimizer.load_state_dict(checkpoint["optimizer"])
+            self.cfg = checkpoint["config"]
 
         else:
             self.actor_critic.mean_layer.load_state_dict(checkpoint["mean_layer"])
-            self.actor_critic.log_std.data = torch.tensor(
-                checkpoint["log_param"], device=self.device
+            self.actor_critic.log_std.data = (
+                checkpoint["log_param"]
+                .detach()
+                .clone()
+                .requires_grad_(True)
+                .to(self.device)
             )
             self.actor_critic.trunk.load_state_dict(checkpoint["trunk"])
+            self.actor_critic.critic.load_state_dict(checkpoint["critic"])
+            self.optimizer.load_state_dict(checkpoint["optimizer"])
+            self.cfg = checkpoint["config"]
 
     def rollout_gif(self, env: Env) -> list[np.ndarray]:
         """
