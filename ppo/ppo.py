@@ -93,7 +93,7 @@ class PPO:
             self.device,
         )
 
-    def collect_rollouts(self, envs: AsyncVectorEnv) -> None:
+    def collect_rollouts(self, envs: AsyncVectorEnv | SyncVectorEnv) -> None:
         """
         Collect rollouts from the environment and store them in the buffer.
 
@@ -233,38 +233,6 @@ class PPO:
             "loss",
         )
 
-    def eval_mean_reward(self, envs: SyncVectorEnv) -> float:
-        """
-        Evaluate agent in the environment for a full episode and return the mean reward.
-
-        Args:
-            envs: the environment to evaluate the agent in.
-
-        Returns:
-            mean_reward: the mean reward obtained during the evaluation.
-        """
-        next_obs, _ = envs.reset()
-        next_obs = torch.tensor(next_obs, dtype=torch.float32, device=self.device)
-        dones = np.zeros(next_obs.size(0), dtype=np.float32)
-        rewards = np.zeros(next_obs.size(0), dtype=np.float32)
-
-        while not dones.all():
-            with torch.no_grad():
-                action, *_ = self.actor_critic.act(next_obs)
-
-            next_obs, reward, termination, truncation, _ = envs.step(
-                action.cpu().numpy()
-            )
-            next_dones = np.logical_or(termination, truncation)
-
-            rewards += reward * (1 - dones)
-            dones = np.logical_or(dones, next_dones)
-            next_obs = torch.tensor(next_obs, dtype=torch.float32, device=self.device)
-
-        mean_reward = float(np.mean(rewards))
-        self.logger.log_scalar("eval/mean_reward", mean_reward, self.global_step)
-        return mean_reward
-
     def save(self, path: Path, model_name: str | None = None) -> None:
         """
         Save the model to the specified path.
@@ -318,15 +286,24 @@ class PPO:
             raise FileNotFoundError(f"Model path {path} does not exist")
 
         if not any(path.iterdir()):
-            print("No models found in the directory, starting from scratch.")
+            print("No models found in the directory, you need to start from scratch.")
             return
 
-        model_files = [p for p in path.iterdir() if p.is_file() and p.suffix == ".pth"]
-        model_files.sort(key=lambda p: int(p.stem.split("_")[-1]))
+        best_path = path / "best_model.pth"
+        if best_path.is_file():
+            checkpoint = torch.load(
+                best_path, map_location=self.device, weights_only=False
+            )
 
-        path = path / model_files[-1]
+        else:
+            model_files = [
+                p for p in path.iterdir() if p.is_file() and p.suffix == ".pth"
+            ]
+            model_files.sort(key=lambda p: int(p.stem.split("_")[-1]))
 
-        checkpoint = torch.load(path, map_location=self.device)
+            path = path / model_files[-1]
+
+            checkpoint = torch.load(path, map_location=self.device, weights_only=False)
 
         if self.discrete_act_space:
             self.actor_critic.actor.load_state_dict(checkpoint["actor"])
@@ -355,6 +332,9 @@ class PPO:
 
         Args:
             env: the environment to generate the GIF from.
+
+        Returns:
+            frames: a list of frames representing the agent's rollout.
         """
         frames = []
         obs, _ = env.reset()
@@ -369,9 +349,39 @@ class PPO:
             frame = env.render()
             frames.append(frame)
 
-            done = bool(term or trunc)
+            done = np.logical_or(term, trunc)
             obs = torch.tensor(obs_np, dtype=torch.float32, device=self.device)
 
         env.close()
 
         return frames
+
+    def rollout_mean_reward(self, envs: AsyncVectorEnv | SyncVectorEnv) -> float:
+        """
+        Evaluate agent in the environment for a full episode and return the mean reward.
+
+        Args:
+            envs: the environment to evaluate the agent in.
+
+        Returns:
+            mean_reward: the mean reward obtained during the evaluation.
+        """
+        next_obs, _ = envs.reset()
+        next_obs = torch.tensor(next_obs, dtype=torch.float32, device=self.device)
+        dones = np.zeros(next_obs.size(0), dtype=np.float32)
+        rewards = np.zeros(next_obs.size(0), dtype=np.float32)
+
+        while not dones.all():
+            with torch.no_grad():
+                action, *_ = self.actor_critic.act(next_obs)
+
+            next_obs, reward, term, trunc, _ = envs.step(action.cpu().numpy())
+            next_dones = np.logical_or(term, trunc)
+
+            rewards += reward * (1 - dones)
+            dones = np.logical_or(dones, next_dones)
+            next_obs = torch.tensor(next_obs, dtype=torch.float32, device=self.device)
+
+        mean_reward = float(np.mean(rewards))
+        self.logger.log_scalar("eval/mean_reward", mean_reward, self.global_step)
+        return mean_reward

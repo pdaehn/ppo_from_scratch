@@ -118,7 +118,7 @@ class PPOTrainer:
             if (i + 1) % self.save_interval == 0:
                 self.ppo.save(self.model_dir)
 
-            eval_mean_reward = self.ppo.eval_mean_reward(self.eval_envs)
+            eval_mean_reward = self.mean_reward_eval()
 
             if eval_mean_reward > best_reward:
                 best_reward = eval_mean_reward
@@ -159,6 +159,13 @@ class PPOTrainer:
         frames = self.ppo.rollout_gif(env)
 
         imageio.mimsave(output_dir, frames, format="GIF", duration=1 / fps, loop=0)
+
+    def mean_reward_eval(self):
+        """
+        Evaluate the mean reward of the policy.
+        """
+        mean_reward = self.ppo.rollout_mean_reward(self.eval_envs)
+        return mean_reward
 
 
 if __name__ == "__main__":
