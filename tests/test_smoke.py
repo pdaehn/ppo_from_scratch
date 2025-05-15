@@ -91,6 +91,6 @@ def test_smoke_train_and_eval():
     for v in logger.scalars.values():
         assert np.isfinite(v), f"Logged scalar {v} is not finite"
 
-    mean_r = ppo.eval_mean_reward(envs)
+    mean_r = ppo.rollout_mean_reward(envs)
     assert isinstance(mean_r, float)
     assert np.isfinite(mean_r), "Mean reward is not finite"

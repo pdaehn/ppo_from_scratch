@@ -18,8 +18,10 @@ A minimal, configurable implementation of **Proximal Policy Optimisation** (PPO)
 
 ## Example rollout
 
-<img src="docs/policy_eval.gif" alt="PPO policy on CartPole" width="400"/>
-
+<figure>
+  <img src="docs/policy_eval.gif" alt="PPO policy on LunarLander"/>
+  <figcaption><em>Policy evaluation on LunarLander-v3 environment with strong wind.</em></figcaption>
+</figure>
 
 ## Installation
 
@@ -40,6 +42,7 @@ This file controls training settings, model architecture, and the environment to
 You can modify this configuration or provide your own YAML file and pass it to the trainer.
 
 ## Quickstart
+
 ```python
 from trainer.train import PPOTrainer
 
@@ -50,7 +53,7 @@ trainer = PPOTrainer()
 trainer.train()
 
 # 3) Evaluate average return
-mean_r = trainer.ppo.eval_mean_reward(trainer.eval_envs)
+mean_r = trainer.mean_reward_eval()
 print(f"Mean episode return: {mean_r:.2f}")
 
 # 4) Record a GIF
