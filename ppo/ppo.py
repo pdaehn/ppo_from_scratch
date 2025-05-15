@@ -208,6 +208,9 @@ class PPO:
 
                 self.optimizer.zero_grad()
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(
+                    self.actor_critic.parameters(), max_norm=0.5
+                )
                 self.optimizer.step()
 
                 clip_frac = ((ratio - 1).abs() > self.clip_epsilon).float().mean()
